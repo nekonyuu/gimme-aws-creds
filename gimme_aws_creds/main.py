@@ -196,8 +196,19 @@ class GimmeAWSCreds(object):
             return 'aws-cn'
         elif saml_acs_url == 'https://signin.amazonaws-us-gov.com/saml':
             return 'aws-us-gov'
+        elif '.okta-emea.com' in saml_acs_url:
+            return 'okta-idp'
+        elif '.okta.com' in saml_acs_url:
+            return 'okta-idp'
+        elif '.oktapreview.com' in saml_acs_url:
+            return 'okta-idp'
         else:
             raise errors.GimmeAWSCredsError("{} is an unknown ACS URL".format(saml_acs_url))
+
+    @staticmethod
+    def _get_target_idp_orgname(saml_acs_url):
+        match = re.search('(https://.*\.com)/.*', saml_acs_url)
+        return match.group(1)
 
     @staticmethod
     def _get_sts_creds(partition, assertion, idp, role, duration=3600):
@@ -611,6 +622,15 @@ class GimmeAWSCreds(object):
         if 'saml_data' in self._cache:
             return self._cache['saml_data']
         self._cache['saml_data'] = saml_data = self.okta.get_saml_response(self.aws_app['links']['appLink'])
+        # checking if we're actually on AWS SAML portal
+        aws_partition = self._get_partition_from_saml_acs(saml_data['TargetUrl'])
+        if aws_partition == 'okta-idp':
+            # inbound SAML authentication
+            # extract new orgname and build a new okta AuthN instance
+            targetorg = self._get_target_idp_orgname(saml_data['TargetUrl'])
+            okta = OktaClient(self.ui, targetorg, self.conf_dict.get("verify_ssl_certs"), self.conf_dict.get("device_token"))
+            auth_result = okta.auth_saml(saml_data)
+            self._cache['saml_data'] = saml_data = okta.get_saml_response(self.conf_dict.get("app_relay_state"))
         return saml_data
 
     @property
